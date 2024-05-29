@@ -1,0 +1,98 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+# Définir les hyperparamètres
+vocab_size = 100  # Taille du vocabulaire
+d_model = 128     # Taille de l'embedding
+nhead = 8         # Nombre de têtes dans le multiheadattention
+num_layers = 4    # Nombre de couches de l'encodeur
+dim_feedforward = 512  # Dimension du feedforward
+seq_length = 30   # Longueur des séquences
+num_epochs = 10   # Nombre d'époques pour l'entraînement
+batch_size = 32   # Taille des lots
+gen_length = 100  # Longueur de la séquence générée par réponse
+learning_rate = 0.001  # Taux d'apprentissage
+
+# Texte d'exemple et vocabulaire
+text = "C'est une journée ensoleillée. Les oiseaux chantent et les fleurs fleurissent. Le chat noir se promène sur le mur. Il observe le monde avec curiosité. Dans la cuisine, une délicieuse odeur de pain frais flotte dans l'air."
+vocab = sorted(set(text))
+char2idx = {char: idx for idx, char in enumerate(vocab)}
+idx2char = {idx: char for idx, char in enumerate(vocab)}
+
+# Convertir le texte en indices
+data = torch.tensor([char2idx[c] for c in text], dtype=torch.long)
+
+# Définir le modèle GPT simple
+class GPTSimple(nn.Module):
+    def __init__(self, vocab_size, d_model, nhead, num_layers, dim_feedforward, max_seq_length):
+        super(GPTSimple, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.positional_encoding = nn.Parameter(torch.zeros(1, max_seq_length, d_model))
+        encoder_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers)
+        self.fc_out = nn.Linear(d_model, vocab_size)
+        self.d_model = d_model
+        self.max_seq_length = max_seq_length
+
+    def forward(self, x):
+        seq_length = x.size(1)
+        x = self.embedding(x) * (self.d_model ** 0.5)
+        x = x + self.positional_encoding[:, :seq_length, :]
+        x = self.transformer_encoder(x)
+        logits = self.fc_out(x)
+        return logits
+
+# Initialiser le modèle, la fonction de perte et l'optimiseur
+model = GPTSimple(len(vocab), d_model, nhead, num_layers, dim_feedforward, seq_length)
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+# Entraîner le modèle
+model.train()
+for epoch in range(num_epochs):
+    for i in range(0, len(data) - seq_length, batch_size):
+        x = torch.stack([data[j:j + seq_length] for j in range(i, min(i + batch_size, len(data) - seq_length))])
+        y = torch.stack([data[j + 1:j + seq_length + 1] for j in range(i, min(i + batch_size, len(data) - seq_length))])
+        
+        optimizer.zero_grad()
+        output = model(x)
+        loss = criterion(output.view(-1, len(vocab)), y.view(-1))
+        loss.backward()
+        optimizer.step()
+    print(f'Epoch {epoch+1}, Loss: {loss.item()}')
+
+# Fonction de génération de texte
+def generate_text(model, start_str, gen_length, vocab, char2idx, idx2char):
+    model.eval()
+    input_eval = torch.tensor([char2idx[s] for s in start_str], dtype=torch.long).unsqueeze(0)
+    text_generated = []
+
+    with torch.no_grad():
+        for _ in range(gen_length):
+            output = model(input_eval)
+            next_char_idx = torch.argmax(output[:, -1, :], dim=-1).item()
+            next_char = idx2char[next_char_idx]
+            text_generated.append(next_char)
+            input_eval = torch.cat([input_eval, torch.tensor([[next_char_idx]], dtype=torch.long)], dim=1)
+            input_eval = input_eval[:, -seq_length:]
+
+    return start_str + ''.join(text_generated)
+
+# Fonction interactive de conversation avec le modèle
+def chat_with_gpt(model, vocab, char2idx, idx2char):
+    print("Vous pouvez maintenant parler avec le modèle GPT. Tapez 'exit' pour quitter.")
+    while True:
+        user_input = input("Vous: ")
+        if user_input.lower() == 'exit':
+            break
+        response = generate_text(model, user_input, gen_length, vocab, char2idx, idx2char)
+        print(f"GPT: {response}")
+
+# Générer un exemple de texte
+start_str = "Ceci est"
+generated_text = generate_text(model, start_str, gen_length, vocab, char2idx, idx2char)
+print(generated_text)
+
+# Démarrer la session interactive
+chat_with_gpt(model, vocab, char2idx, idx2char)
